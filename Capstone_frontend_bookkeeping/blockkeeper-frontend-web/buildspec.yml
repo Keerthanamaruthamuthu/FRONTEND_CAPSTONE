@@ -1,0 +1,38 @@
+version: 0.1
+
+phases:
+  install:
+    commands:
+      - echo Installing dependencies...
+      - sudo apt-get update && apt-get -y install apt-transport-https
+      - echo Installing Yarn...
+      - curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+      - echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+      - sudo apt-get update && sudo apt-get -y install yarn
+  pre_build:
+    commands:
+      - echo Installing NPM dependencies via yarn...
+      - yarn install
+  build:
+    commands:
+      - echo Build started
+      - yarn build
+  post_build:
+    commands:
+      - echo Build completed, sync to s3 bucket now
+
+      - aws s3 sync build s3://app.blockkeeper.io --delete --cache-control max-age=31536000,public
+
+      #service worker does not allow caching
+      - aws s3 cp s3://app.blockkeeper.io/service-worker.js s3://app.blockkeeper.io/service-worker.js --metadata-directive REPLACE --cache-control max-age=0,no-cache,no-store,must-revalidate --content-type application/javascript --acl public-read
+      - aws s3 cp s3://app.blockkeeper.io/index.html s3://app.blockkeeper.io/index.html --metadata-directive REPLACE --cache-control max-age=0,no-cache,no-store,must-revalidate --content-type text/html --acl public-read
+
+      #- echo Start Cloudfront invalidation
+      - aws configure set preview.cloudfront true
+      - aws cloudfront create-invalidation --distribution-id E2ML292P0CE01 --paths /*
+
+      - echo Done
+
+artifacts:
+  files:
+    - build/**/*

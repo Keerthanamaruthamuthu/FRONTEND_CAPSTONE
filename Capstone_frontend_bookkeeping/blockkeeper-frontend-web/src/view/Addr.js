@@ -1,0 +1,633 @@
+import React from 'react'
+import Table from '@material-ui/core/Table'
+import TableBody from '@material-ui/core/TableBody'
+import TableCell from '@material-ui/core/TableCell'
+import TableRow from '@material-ui/core/TableRow'
+import TextField from '@material-ui/core/TextField'
+import Button from '@material-ui/core/Button'
+import Typography from '@material-ui/core/Typography'
+import LinearProgress from '@material-ui/core/LinearProgress'
+import Grid from '@material-ui/core/Grid'
+import Paper from '@material-ui/core/Paper'
+import {withStyles} from '@material-ui/core/styles'
+import Divider from '@material-ui/core/Divider'
+import QRCode from 'qrcode-react'
+import TransitiveNumber from 'react-transitive-number'
+import {theme, themeBgStyle, noTxtDeco, qrCodeWrap, gridWrap, gridSpacer,
+  gridGutter, tscitem, addr, amnt, tscIcon, tscAmnt, h4, body1,
+  actnBtnClr, topBtnClass, topBarSpacer} from './Style'
+import {ArrowBack, Launch} from '@material-ui/icons'
+import {setBxpTrigger, unsetBxpTrigger, BxpFloatBtn, TopBar, Snack, Modal,
+  CoinIcon, TscListAddr, ExtLink, InfoUpdateFailed, ToTopBtn, Done,
+  Edit} from './Lib'
+import Addr from '../logic/Addr'
+import __ from '../util'
+
+class AddrView extends React.Component {
+  constructor (props) {
+    super(props)
+    this.cx = props.cx
+    this.addrId = props.match.params.addrId
+    this.addrObj = new Addr(this.cx, this.addrId)
+    this.state = {show: false, toggleCoins: false, edit: false, unveil: false}
+    this.goBack = props.history.goBack
+    this.load = this.load.bind(this)
+    this.save = this.save.bind(this)
+    this.delete = this.delete.bind(this)
+    this.set = this.set.bind(this)
+    this.show = () => {
+      this.setState({show: !this.state.show, edit: false, unveil: false})
+    }
+    this.toggleCoins = () => {
+      this.setState({toggleCoins: !this.state.toggleCoins})
+    }
+  }
+
+  async componentDidMount () {
+    Object.assign(this, __.initView(this, 'addr'))
+    await this.load()
+  }
+
+  componentWillUnmount () {
+    unsetBxpTrigger(this)
+  }
+
+  async load () {
+    let addr, user
+    try {
+      ;[addr, user] = await Promise.all([
+        this.addrObj.load(),
+        this.cx.user.load()
+      ])
+    } catch (e) {
+      return this.errGo(`Loading wallet failed: ${e.message}`, e, '/depot')
+    }
+    this.user = user
+    const {coin0, coin1} = await this.cx.user.getCoins(this.state.coin, user)
+    setBxpTrigger(this)
+    const blc = this.cx.depot.getAddrBlc([addr])
+    const tagsJoin = (addr.tags || []).join(' ')
+    this.setState({
+      addr,
+      tagsJoin,
+      coin0,
+      coin1,
+      upd: false,
+      name: addr.name,
+      desc: addr.desc,
+      tscs: addr.tscs,
+      coin: addr.coin,
+      manAddrAmnt: addr.amnt,
+      blc1: `${addr.amnt}`,
+      blc2: `${blc.get(coin0)}`,
+      blc3: `${blc.get(coin1)}`,
+      snack: this.getSnack(),
+      bxpSts: this.cx.depot.getBxpSts(),
+      addrUpdErrIds: this.cx.depot.addrUpdErrIds
+    })
+  }
+
+  async save () {
+    if (this.state.upd === false) return this.setState({edit: false})
+    this.setState({edit: false, busy: true})
+    try {
+      const data = {
+        name: this.state.name,
+        desc: this.state.desc,
+        tags: __.toTags(this.state.tagsJoin).split(' ')
+      }
+      if (this.state.addr.type === 'man') data.amnt = this.state.manAddrAmnt
+      await this.addrObj.save(data)
+      const addr = await this.addrObj.load() // need to (re)load to set rates
+      this.setSnack('Wallet updated')
+      this.setState({upd: false, busy: false, addr, snack: this.getSnack()})
+      if (this.state.addr.type === 'man') {
+        const blc = this.cx.depot.getAddrBlc([addr])
+        this.setState({
+          blc1: String(addr.amnt),
+          blc2: String(blc.get(this.state.coin0)),
+          blc3: String(blc.get(this.state.coin1))
+        })
+      }
+    } catch (e) {
+      this.err(`Updating wallet failed: ${e.message}`, e)
+    } finally {
+      this.setState({busy: false, upd: false, edit: false})
+    }
+  }
+
+  async delete () {
+    try {
+      await this.addrObj.delete()
+      this.setSnack('Wallet disconnected')
+      this.props.history.push('/depot')
+    } catch (e) {
+      return this.err(
+        `Disconnecting wallet failed: ${e.message}`, e, {ask: false}
+      )
+    }
+  }
+
+  set (ilk, val) {
+    this.setState({[ilk]: val}, () => {
+      let d = {
+        upd: false,
+        nameEmsg: __.vldAlphNum(this.state.name, {max: __.cfg('maxName')}),
+        descEmsg: __.vldAlphNum(this.state.desc, {max: __.cfg('maxHigh')}),
+        tagsEmsg: __.vldAlphNum(this.state.tagsJoin, {max: __.cfg('maxHigh')})
+      }
+      if (this.state.addr.type === 'man') {
+        d.manAddrAmntEmsg = __.vldFloat(this.state.manAddrAmnt)
+        if (this.state.name.trim() &&
+            !d.nameEmsg && !d.descEmsg && !d.tagsEmsg && !d.manAddrAmntEmsg) {
+          d.upd = true
+        }
+      } else {
+        if (!d.nameEmsg && !d.descEmsg && !d.tagsEmsg) d.upd = true
+      }
+      this.setState(d)
+    })
+  }
+
+  render () {
+    if (this.state.err) {
+      return (
+        <Modal onClose={this.goBack}>
+          {this.state.err}
+        </Modal>
+      )
+    } else if (this.state.ask) {
+      return (
+        <Modal
+          withBusy
+          onClose={() => this.setState({ask: false})}
+          lbl='Disconnect wallet'
+          actions={[{
+            lbl: 'Disconnect',
+            onClick: async () => { await this.delete() }
+          }]}
+        >
+          {`Disconnect wallet "${this.state.name}"?`}
+        </Modal>
+      )
+    } else if (this.state.addr && this.state.tscs) {
+      // don't enable link for 'man' and 'hd' (for privacy reasons) addrs
+      let addrUrl
+      if (this.state.addr.type === 'std') {
+        addrUrl = __.toBxpUrl(
+          'addr',
+          this.state.addr.coin,
+          this.state.addr.hsh,
+          this.state.addr.bxp
+        )
+      }
+      return (
+        <div className={this.props.classes.topBarSpacer}>
+          <div className={this.props.classes.themeBgStyle}>
+            {this.state.snack &&
+              <Snack
+                msg={this.state.snack}
+                onClose={() => this.setState({snack: null})}
+              />
+            }
+            {this.state.edit &&
+              <TopBar
+                midTitle='Wallet'
+                action={<Done />}
+                onClick={async () => { if (this.state.upd) await this.save() }}
+                onClickLeft={() => this.setState({edit: false})}
+                isActionAllowed={this.state.upd}
+                modeCancel
+                noUser
+              />
+            }
+            {!this.state.edit &&
+              <TopBar
+                midTitle='Wallet'
+                iconLeft={<ArrowBack />}
+                onClickLeft={this.goBack}
+                action={<Edit />}
+                onClick={
+                  () => this.setState({edit: !this.state.edit, show: true})
+                }
+                noUser
+              />
+            }
+          </div>
+          {this.state.busy &&
+            <LinearProgress />}
+          <Paper
+            elevation={0}
+            square
+            className={this.props.classes.paperWrap}
+          >
+            <div className={this.props.classes.gridGutter}>
+              <Grid container justify='center' spacing={0}>
+                <Grid item xs={12} sm={10} md={8} lg={6}>
+                  <CoinIcon coin={this.state.coin} size={100} />
+                  {!addrUrl &&
+                    <Typography
+                      variant='h6'
+                      color='default'
+                      className={this.props.classes.h6Style}
+                      noWrap
+                      gutterBottom
+                    >
+                      {this.state.addr.name}
+                    </Typography>
+                  }
+                  {addrUrl &&
+                    <ExtLink
+                      to={addrUrl}
+                      className={this.props.classes.noTxtDeco}
+                      txt={
+                        <Typography
+                          variant='h6'
+                          color='default'
+                          className={this.props.classes.h6Style}
+                          noWrap
+                          gutterBottom
+                        >
+                          {this.state.addr.name}
+                          <Launch />
+                        </Typography>}
+                    />
+                  }
+                  <Typography
+                    variant='h2'
+                    className={this.props.classes.h2}
+                  >
+                    <TransitiveNumber>
+                      {this.state.blc1}
+                    </TransitiveNumber>&nbsp;
+                    <CoinIcon
+                      coin={this.state.coin}
+                      size={35}
+                      color={theme.palette.primary['500']}
+                      alt
+                    />
+                    {this.state.addrUpdErrIds.has(this.state.addr._id) &&
+                    <InfoUpdateFailed />}
+                  </Typography>
+                  {!this.state.toggleCoins &&
+                  <Typography
+                    variant='h5'
+                    color='primary'
+                    onClick={this.toggleCoins}
+                    gutterBottom
+                  >
+                    {__.formatNumber(
+                      this.state.blc2, this.state.coin0, this.user.locale, true)}
+                    &nbsp;
+                    <CoinIcon
+                      coin={this.state.coin0}
+                      color={theme.palette.primary['500']}
+                      alt
+                    />
+                  </Typography>}
+                  {this.state.toggleCoins &&
+                  <Typography
+                    variant='h5'
+                    onClick={this.toggleCoins}
+                    color='primary'
+                    gutterBottom
+                  >
+                    {__.formatNumber(
+                      this.state.blc3, this.state.coin1, this.user.locale, true)}
+                    <CoinIcon
+                      coin={this.state.coin1}
+                      color={theme.palette.primary['500']}
+                      alt
+                    />
+                  </Typography>}
+                  {!this.state.show &&
+                    <Button
+                      variant='contained'
+                      color='default'
+                      onClick={this.show}
+                      style={{marginTop: '50px'}}
+                    >
+                      Show infos
+                    </Button>}
+                  {this.state.show &&
+                  <div>
+                    <Divider light />
+                    {(this.state.addr.type === 'std' || this.state.unveil) &&
+                    <div className={this.props.classes.qrCodeWrap}>
+                      <QRCode value={this.state.addr.hsh} />
+                      <Typography className={this.props.classes.addrStyle}>
+                        {this.state.addr.hsh}
+                      </Typography>
+                    </div>}
+                    <Divider light />
+                    <div className={this.props.classes.tableWrap}>
+                      <Table>
+                        <TableBody>
+                          <TableRow>
+                            <TableCell width={'10%'} padding='none'>
+                              Name
+                            </TableCell>
+                            <TableCell numeric padding='none'>
+                              {this.state.edit &&
+                                <TextField
+                                  fullWidth
+                                  value={this.state.name}
+                                  error={Boolean(this.state.nameEmsg)}
+                                  helperText={this.state.nameEmsg}
+                                  onChange={evt => {
+                                    this.set('name', evt.target.value)
+                                  }}
+                                  inputProps={{
+                                    style: {textAlign: 'right'}
+                                  }}
+                                />
+                              }
+                              {!this.state.edit &&
+                                this.state.addr.name}
+                            </TableCell>
+                          </TableRow>
+                          {this.state.addr.type === 'man' &&
+                            <TableRow>
+                              <TableCell width={'10%'} padding='none'>
+                                Amount
+                              </TableCell>
+                              <TableCell numeric padding='none'>
+                                {this.state.edit &&
+                                  <TextField
+                                    fullWidth
+                                    value={this.state.manAddrAmnt}
+                                    error={Boolean(this.state.manAddrAmntEmsg)}
+                                    helperText={this.state.manAddrAmntEmsg}
+                                    onChange={evt => {
+                                      this.set('manAddrAmnt', evt.target.value)
+                                    }}
+                                    inputProps={{style: {textAlign: 'right'}}}
+                                  />
+                                }
+                                {!this.state.edit &&
+                                  <span>
+                                    {this.state.blc1}
+                                    &nbsp; {this.state.coin.toUpperCase()}
+                                  </span>
+                                }
+                              </TableCell>
+                            </TableRow>
+                          }
+                          <TableRow>
+                            <TableCell width={'10%'} padding='none'>
+                              Type
+                            </TableCell>
+                            <TableCell numeric padding='none'>
+                              {this.state.addr.type === 'hd' &&
+                                <span>
+                                  HD wallet
+                                </span>
+                              }
+                              {this.state.addr.type === 'std' &&
+                                <span>Simple wallet (public key)</span>
+                              }
+                              {this.state.addr.type === 'man' &&
+                                <span>Manual wallet</span>
+                              }
+                            </TableCell>
+                          </TableRow>
+                          {(this.state.addr.hd || {}).baseAbsPath &&
+                            <TableRow>
+                              <TableCell width={'10%'} padding='none'>
+                                HD base path
+                              </TableCell>
+                              <TableCell numeric padding='none'>
+                                {this.state.addr.hd.baseAbsPath}
+                              </TableCell>
+                            </TableRow>}
+                          <TableRow>
+                            <TableCell width={'10%'} padding='none'>
+                              Notes
+                            </TableCell>
+                            <TableCell numeric padding='none'>
+                              {this.state.edit &&
+                                <TextField
+                                  fullWidth
+                                  value={this.state.desc}
+                                  error={Boolean(this.state.descEmsg)}
+                                  helperText={this.state.descEmsg}
+                                  onChange={evt => {
+                                    this.set('desc', evt.target.value)
+                                  }}
+                                  inputProps={{
+                                    style: {
+                                      textAlign: 'right'
+                                    }
+                                  }}
+                                />}
+                              {!this.state.edit &&
+                                this.state.addr.desc}
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell width={'10%'} padding='none'>
+                              Tags
+                            </TableCell>
+                            <TableCell numeric padding='none'>
+                              {this.state.edit &&
+                                <TextField
+                                  fullWidth
+                                  value={this.state.tagsJoin}
+                                  error={Boolean(this.state.tagsEmsg)}
+                                  helperText={this.state.tagsEmsg}
+                                  onChange={evt => {
+                                    this.set('tagsJoin', evt.target.value)
+                                  }}
+                                  inputProps={{
+                                    style: {
+                                      textAlign: 'right'
+                                    }
+                                  }}
+                                />}
+                              {!this.state.edit &&
+                                this.state.tagsJoin}
+                            </TableCell>
+                          </TableRow>
+                          {this.state.addr.hsh &&
+                            <TableRow>
+                              <TableCell width={'10%'} padding='none'>
+                                Transactions
+                              </TableCell>
+                              <TableCell numeric padding='none'>
+                                {this.state.addr.tscCnt > __.cfg('maxTscCnt') &&
+                                  this.state.addr.type === 'hd' && 'At least '}
+                                {this.state.addr.tscCnt}
+                                {this.state.addr.tscCnt > __.cfg('maxTscCnt') &&
+                                  ` (only the last ${__.cfg('maxTscCnt')} ` +
+                                  'are listed)'}
+                              </TableCell>
+                            </TableRow>}
+                          {(
+                            (this.state.addr.std || {snd: {}})
+                              .snd.amnt != null
+                          ) &&
+                            <TableRow>
+                              <TableCell width={'10%'} padding='none'>
+                                Total Send
+                              </TableCell>
+                              <TableCell numeric padding='none'>
+                                {__.formatNumber(
+                                  this.state.addr.std.snd.amnt,
+                                  this.state.coin,
+                                  this.user.locale
+                                )} {this.state.coin}
+                              </TableCell>
+                            </TableRow>
+                          }
+                          {(
+                            (this.state.addr.std || {rcv: {}})
+                              .rcv.amnt != null
+                          ) &&
+                            <TableRow>
+                              <TableCell width={'10%'} padding='none'>
+                                Total Received
+                              </TableCell>
+                              <TableCell numeric padding='none'>
+                                {__.formatNumber(
+                                  this.state.addr.std.rcv.amnt,
+                                  this.state.coin,
+                                  this.user.locale
+                                )} {this.state.coin}
+                              </TableCell>
+                            </TableRow>
+                          }
+                        </TableBody>
+                      </Table>
+                    </div>
+                    {(
+                      this.state.addr.type === 'hd' &&
+                      !this.state.unveil && !this.state.edit
+                    ) &&
+                      <Button
+                        variant='contained'
+                        color='default'
+                        onClick={() => {
+                          this.setState({unveil: !this.state.unveil})
+                        }}
+                        className={this.props.classes.unvlBtn}
+                      >
+                        Unveil HD wallet key
+                      </Button>
+                    }
+                    {this.state.edit &&
+                      <Button
+                        onClick={() => this.setState({ask: true})}
+                        className={this.props.classes.unvlBtn}
+                        style={{color: theme.palette.error['500']}}
+                      >
+                          Disconnect wallet
+                      </Button>
+                    }
+                    {!this.state.edit &&
+                      <Button
+                        variant='contained'
+                        color='default'
+                        onClick={this.show}>
+                        Hide infos
+                      </Button>
+                    }
+                  </div>
+                  }
+                </Grid>
+              </Grid>
+            </div>
+          </Paper>
+          {this.state.tscs.length > 0 &&
+            <TscListAddr
+              addr={this.state.addr}
+              tscs={this.state.tscs}
+              coin0={this.state.coin0}
+              addrIcon={false}
+              className={this.props.classes.gridSpacer}
+              gridWrapClassName={this.props.classes.gridWrap}
+              gridGutterClassName={this.props.classes.gridGutter}
+              itemClassName={this.props.classes.tscitem}
+              h4ClassName={this.props.classes.h4}
+              body1ClassName={this.props.classes.body1}
+              tscAmntClassName={this.props.classes.tscAmnt}
+              noTxtDecoClassname={this.props.classes.noTxtDeco}
+              locale={this.user.locale}
+            />
+          }
+          {this.state.tscs.length <= 0 &&
+            <Paper
+              elevation={5}
+              square
+              className={this.props.classes.paperWrap}
+            >
+              <Typography align='center' variant='body2'>
+                {this.state.addr.type !== 'man' &&
+                  'No transactions'}
+                {this.state.addr.type === 'man' &&
+                  'No transactions (manually added wallet)'}
+              </Typography>
+            </Paper>
+          }
+          {this.state.addr.type !== 'man' &&
+            <BxpFloatBtn
+              onClick={() => this.cx.depot.bxp([this.addrId])}
+              bxpSts={this.state.bxpSts}
+            />
+          }
+          <ToTopBtn
+            className={this.props.classes.topBtnClass}
+          />
+        </div>
+      )
+    } else {
+      return <LinearProgress />
+    }
+  }
+}
+
+export default withStyles({
+  themeBgStyle,
+  noTxtDeco,
+  qrCodeWrap,
+  gridWrap,
+  gridSpacer,
+  gridGutter,
+  tscitem,
+  addr,
+  amnt,
+  tscIcon,
+  tscAmnt,
+  h4,
+  body1,
+  actnBtnClr,
+  topBtnClass,
+  topBarSpacer,
+  paperWrap: {
+    textAlign: 'center',
+    paddingTop: theme.spacing.unit * 3,
+    paddingBottom: theme.spacing.unit * 3
+  },
+  h6Style: {
+    paddingTop: theme.spacing.unit * 2,
+    lineHeight: 1.5
+  },
+  h2: {
+    fontWeight: '400',
+    color: theme.palette.primary['500']
+  },
+  deleteIcon: {
+    width: theme.spacing.unit * 2,
+    height: theme.spacing.unit * 2
+  },
+  tableWrap: {
+    overflowX: 'auto',
+    marginBottom: theme.spacing.unit * 2
+  },
+  addrStyle: {
+    fontSize: '13px',
+    overflowX: 'auto'
+  },
+  unvlBtn: {
+    marginRight: theme.spacing.unit
+  }
+})(AddrView)
