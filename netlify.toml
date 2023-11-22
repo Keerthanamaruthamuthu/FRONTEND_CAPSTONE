@@ -1,4 +1,2 @@
 [build]
-  command: npm start
-  publish: /opt/build/repo/opt/build/repo
-  
+  ignore = ".*"
