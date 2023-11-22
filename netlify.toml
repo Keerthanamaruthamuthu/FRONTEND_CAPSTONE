@@ -1,2 +1,5 @@
 [build]
-  ignore = "/*"
+  command: npm start
+  commandOrigin: config
+  publish: /opt/build/repo/opt/build/repo
+  publishOrigin: config
