@@ -1,2 +1,3 @@
 [build]
-  ignore = ".*"
+  command = "echo Skipping the build step"
+  publish = "Capstone_frontend_bookkeeping/blockkeeper-frontend-web"  # Specify the directory to deploy
